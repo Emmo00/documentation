@@ -1,20 +1,70 @@
 ---
-title: "Introduction"
-description: "Welcome to your project"
+title: "x402Go"
+description: "Accept stablecoin payments on your API with x402."
 ---
 
-Write a short description of your product here. What it does, who it's for, and what they can accomplish with it.
+x402Go is a pay-as-you-go [x402](https://www.x402.org/) facilitator on Celo. Which means you do not need to get facilitator credits or think about fees. Every payment pays the fees for itself.
 
-<Tip>
-  Ready to make this your own? Start by editing this page. Update your `docs.json` file to customize your site. Then fill out the [Quickstart](/quickstart) page.
-</Tip>
+x402Go verifies every payment, pays for and settles it on-chain, and sends the rest directly to your configured payout address. We never hold your funds.
 
-<Card title="Quickstart" icon="rocket" href="/quickstart">
-  This card links to the quickstart page in your project.
-</Card>
-<Card title="Components" icon="puzzle-piece" href="https://mintlify.com/docs/components">
-  Add cards, callouts, steps, tabs, and more to design and structure your pages.
-</Card>
-<Card title="Settings" icon="gear" href="https://mintlify.com/docs/organize/settings">
-  Set your site name, branding, and navigation in the `docs.json` file.
-</Card>
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Protect your first endpoint in a few minutes.
+  </Card>
+  <Card title="API reference" icon="code" href="/api-reference/overview">
+    Request and response formats for `/supported`, `/verify`, and `/settle`.
+  </Card>
+  <Card title="Celo Sepolia sandbox" icon="box" href="/guides/celo-sepolia">
+    Test your integration with testnet tokens before you go live.
+  </Card>
+  <Card title="How it works" icon="book" href="/guides/how-it-works">
+    How verification, settlement, and payouts fit together.
+  </Card>
+</CardGroup>
+
+## Before you start
+
+1. Sign in to the [x402Go dashboard](https://x402go.online/dashboard) with your wallet.
+2. Set your **payout wallet**. This is where your earnings are sent.
+3. Create an **API key**. It is shown only once, so copy it right away and store it like a password.
+4. Copy your **payment address** from the dashboard.
+5. Set the payment address as `payTo` in your x402 payment configuration.
+
+There is nothing to deploy. Your payment address is the same on every supported network, and it is set up automatically when your first payment settles on each one.
+
+<Warning>
+Keep these three apart:
+
+- **API key:** a secret that authenticates your server's requests to the facilitator.
+- **Payment address:** the `payTo` in your payment requirements. Clients pay this address.
+- **Payout wallet:** your own wallet, where settled payments end up.
+
+Never use your payout wallet as `payTo`. The facilitator rejects requests whose `payTo` is not your payment address.
+</Warning>
+
+## Facilitator
+
+Base URL:
+
+```text
+https://api.x402go.online
+```
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /supported` | List the x402 versions, networks, and tokens the facilitator accepts. |
+| `POST /verify` | Check a payment against your payment requirements. No funds move. |
+| `POST /settle` | Submit the payment on-chain. Funds are collected and split in a single transaction. |
+
+`/verify` and `/settle` require your API key in the `x-api-key` header. Keep it on your server and never expose it to clients. See the [API reference](/api-reference/overview) for details.
+
+## Supported networks and assets
+
+x402Go is live on Celo mainnet with USDC, USDT, USAT, and cNGN. Use Celo Sepolia for testing. Call `GET /supported` for the current list.
+
+## Choose your integration
+
+- [Express](/guides/express) with `@x402/express`
+- [Hono](/guides/hono) with `@x402/hono`
+- [Next.js App Router](/guides/nextjs) with `@x402/next`
+- [Celo Sepolia testnet](/guides/celo-sepolia)

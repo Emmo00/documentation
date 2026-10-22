@@ -1,0 +1,190 @@
+---
+title: "Celo Sepolia sandbox"
+description: "Test your x402Go integration end to end on Celo Sepolia with free testnet USDC before you go live."
+---
+
+Celo Sepolia is a test network, so you can run a complete payment, from request to settlement, without spending real money. This guide takes you from an empty wallet to a settled test payment.
+
+## Network settings
+
+| Setting | Value |
+|---|---|
+| Network | `eip155:11142220` |
+| Facilitator | `https://api.x402go.online` |
+| API key | From your [x402Go dashboard](https://x402go.online/dashboard) |
+| Payment address (`payTo`) | From your dashboard |
+| Token | USDC (`0x01C5C0122039549AD1493B8220cABEdD739BC44E`) |
+
+The token's details, as returned by `/supported`:
+
+```json
+{
+  "asset": "0x01C5C0122039549AD1493B8220cABEdD739BC44E",
+  "symbol": "USDC",
+  "decimals": 6,
+  "name": "USDC",
+  "version": "2",
+  "assetTransferMethod": "eip3009"
+}
+```
+
+## 1. Check the token is supported
+
+```bash
+curl https://api.x402go.online/supported
+```
+
+Find the `eip155:11142220` entry with `x402Version: 2`, and confirm the USDC address appears in its `supportedAssets`.
+
+## 2. Run a paid endpoint
+
+Follow the [Quickstart](/quickstart) to run the example server. Use these values in its `.env`:
+
+```dotenv
+FACILITATOR_URL=https://api.x402go.online
+FACILITATOR_API_KEY=your_api_key
+PAY_TO=your_payment_address
+
+NETWORK=eip155:11142220
+ASSET=0x01C5C0122039549AD1493B8220cABEdD739BC44E
+ASSET_NAME=USDC
+ASSET_VERSION=2
+AMOUNT=10000
+METHOD=eip3009
+```
+
+`AMOUNT` is in the token's smallest unit. USDC has 6 decimals, so `10000` is 0.01 USDC. The price must also be higher than the x402Go fee.
+
+Start the server and check that an unpaid request is refused:
+
+```bash
+npx tsx server.ts
+curl -i http://localhost:3000/paid
+```
+
+You should get `402 Payment Required` with the payment request in the response.
+
+## 3. Create and fund a test wallet
+
+Make a new wallet just for testing. Never use a wallet that holds real funds.
+
+```ts
+// wallet.ts
+import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
+
+const key = generatePrivateKey();
+console.log(`EVM_PRIVATE_KEY=${key}`);
+console.log(`Address: ${privateKeyToAccount(key).address}`);
+```
+
+```bash
+npx tsx wallet.ts
+```
+
+Then get free testnet USDC from the [Circle faucet](https://faucet.circle.com/): choose Celo Sepolia and USDC, and enter the address printed above.
+
+You don't need CELO in this wallet. The customer only signs the payment, and x402Go pays the network fee.
+
+## 4. Run the client
+
+In a separate folder:
+
+```bash
+npm install @x402/fetch @x402/core @x402/evm viem dotenv
+npm install -D typescript tsx @types/node
+```
+
+Create `.env` with the key from the previous step:
+
+```dotenv
+EVM_PRIVATE_KEY=0xyour_test_wallet_key
+# SERVER_URL=http://localhost:3000/paid
+```
+
+Create `client.ts`:
+
+```ts
+import 'dotenv/config';
+import { privateKeyToAccount } from 'viem/accounts';
+import { x402Client } from '@x402/core/client';
+import { ExactEvmScheme } from '@x402/evm/exact/client';
+import { wrapFetchWithPayment, x402HTTPClient } from '@x402/fetch';
+
+const NETWORK = 'eip155:11142220';
+const USDC = '0x01C5C0122039549AD1493B8220cABEdD739BC44E';
+
+async function main() {
+  const key = process.env.EVM_PRIVATE_KEY;
+  if (!key) throw new Error('Missing environment variable: EVM_PRIVATE_KEY');
+  const signer = privateKeyToAccount(key as `0x${string}`);
+
+  const client = x402Client.fromConfig({
+    schemes: [{ network: 'eip155:*', client: new ExactEvmScheme(signer) }],
+    spendControls: {
+      // Opt in to this token, capped at 1 USDC per payment (6 decimals).
+      allowedAssets: [{ network: NETWORK, asset: USDC, maxAmountPerPayment: '1000000' }],
+    },
+  });
+
+  const fetchWithPayment = wrapFetchWithPayment(fetch, client);
+  const httpClient = new x402HTTPClient(client);
+
+  const url = process.env.SERVER_URL ?? 'http://localhost:3000/paid';
+  console.log(`Paying ${url} from ${signer.address}`);
+
+  const response = await fetchWithPayment(url, { method: 'GET' });
+  const result = await httpClient.processResponse(response);
+
+  console.log('Status:', response.status);
+  console.log('Body:', result.body);
+
+  if (result.paymentStatus === 'settled') {
+    console.log('Payment settled:', result.header);
+  } else {
+    console.error('Payment not settled:', result.paymentStatus, result.header);
+    process.exitCode = 1;
+  }
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});
+```
+
+```bash
+npx tsx client.ts
+```
+
+A successful run prints status `200`, the paid response, and a settlement receipt that includes the transaction hash.
+
+<Note>
+The `spendControls` block is required. By default the x402 client only pays tokens it already recognizes, with a $1 cap per payment, and it refuses anything else with a "rejected by spendControls" error. The `asset` value must match your server's `ASSET`. The cap is a safety limit for your wallet, so set it as low as you like.
+</Note>
+
+## 5. Verify settlement
+
+After a paid request:
+
+- Check the transaction hash on [Celo Sepolia Celoscan](https://sepolia.celoscan.io/).
+- Check your payout wallet. It should have received the payment minus x402Go's fee.
+
+## Troubleshooting
+
+| Problem | Likely cause |
+|---|---|
+| `rejected by spendControls` | The client is missing the `allowedAssets` entry, or its `asset` doesn't match the server's `ASSET`. |
+| `insufficient_funds` | The test wallet has no USDC. Use the faucet. |
+| `invalid_pay_to` | `PAY_TO` isn't your payment address. Copy it again from the dashboard. |
+| `amount_below_fee` | `AMOUNT` isn't higher than the fee for the token. |
+| `invalid_exact_evm_payload_signature` | `ASSET_NAME` or `ASSET_VERSION` on the server doesn't match `/supported`. |
+| `401` from the facilitator | The API key is missing or wrong. |
+
+## Before mainnet
+
+Move to mainnet only after a test payment succeeds end to end:
+
+1. Check `GET /supported` for the mainnet network (`eip155:42220`) and the token you want.
+2. Update the server's `NETWORK`, `ASSET`, `ASSET_NAME`, `ASSET_VERSION`, `AMOUNT`, and `METHOD`.
+3. Update the client's network and token in `allowedAssets`, with a cap you're comfortable with.
+4. Confirm your payout wallet in the dashboard, then make one small real payment.

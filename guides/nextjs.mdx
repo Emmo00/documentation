@@ -1,0 +1,158 @@
+---
+title: "Next.js"
+description: "Charge for Next.js App Router endpoints with x402 and let x402Go verify, settle, and pay you."
+---
+
+Add the official x402 package to your Next.js app and point it at x402Go. Requests to your paid routes get a payment request, and your handler runs once the customer has paid. If your handler fails, the customer isn't charged.
+
+This guide shows the Next.js-specific setup. For credentials, choosing a token, and going live, see the [Quickstart](/quickstart).
+
+## Install
+
+In an existing Next.js App Router project:
+
+```bash
+npm install @x402/next @x402/core @x402/evm
+```
+
+Install matching versions of the `@x402/*` packages. If you see type errors, check the SDK's installation guide for the versions it expects.
+
+## Environment variables
+
+Add these to `.env.local`. Next.js loads the file automatically. Get your API key and payment address from the [x402Go dashboard](https://x402go.online/dashboard), and the token values from `GET /supported`.
+
+```bash
+curl -s https://api.x402go.online/supported -H "x-api-key: $FACILITATOR_API_KEY"
+```
+
+| Variable | Value |
+|----------------|-------------|
+| `FACILITATOR_API_KEY`| Your x402Go API key. |
+| `PAY_TO` | Your x402Go payment address. |
+| `NETWORK` | The network, for example `eip155:11142220` for Celo Sepolia or `eip155:42220` for Celo mainnet. |
+| `ASSET` | The token's contract address. |
+| `ASSET_NAME` | The token's `name` from `/supported`. |
+| `ASSET_VERSION` | The token's `version` from `/supported`. |
+| `METHOD` | Optional. Set to `permit2` if the token's `assetTransferMethod` is `permit2`. Omit it otherwise. |
+
+<Warning>
+Never add the `NEXT_PUBLIC_` prefix to these variables. Next.js sends prefixed variables to the browser, which would expose your API key.
+</Warning>
+
+## Set up x402 once
+
+Create `lib/x402.ts`. Your routes share this setup.
+
+```ts
+// lib/x402.ts
+import { HTTPFacilitatorClient, x402ResourceServer } from '@x402/core/server';
+import { ExactEvmScheme } from '@x402/evm/exact/server';
+
+const required = (name: string) => {
+  const value = process.env[name];
+  if (!value) throw new Error(`Missing environment variable: ${name}`);
+  return value;
+};
+
+const apiKey = required('FACILITATOR_API_KEY');
+
+export const payTo = required('PAY_TO');
+export const network = required('NETWORK') as `${string}:${string}`;
+
+const facilitator = new HTTPFacilitatorClient({
+  url: process.env.FACILITATOR_URL ?? 'https://api.x402go.online',
+  createAuthHeaders: async () => {
+    const headers = { 'x-api-key': apiKey };
+    return { verify: headers, settle: headers, supported: headers };
+  },
+});
+
+export const server = new x402ResourceServer(facilitator).register(network, new ExactEvmScheme());
+
+// Amounts are in the token's smallest unit (10000 = 0.01 for a 6-decimal token).
+export const price = (amount: string) => ({
+  amount,
+  asset: required('ASSET'),
+  extra: {
+    name: required('ASSET_NAME'),
+    version: required('ASSET_VERSION'),
+    ...(process.env.METHOD === 'permit2' ? { assetTransferMethod: 'permit2' } : {}),
+  },
+});
+```
+
+## Protect an API route
+
+Wrap the route's handler with `withX402`:
+
+```ts
+// app/api/premium/route.ts
+import { NextRequest, NextResponse } from 'next/server';
+import { withX402 } from '@x402/next';
+import { network, payTo, price, server } from '../../../lib/x402';
+
+const handler = async (_req: NextRequest) =>
+  NextResponse.json({ content: 'This resource requires payment.' });
+
+export const GET = withX402(
+  handler,
+  {
+    '/api/premium': {
+      accepts: [{ scheme: 'exact', network, payTo, price: price('10000') }],
+      description: 'Premium content',
+      mimeType: 'application/json',
+    },
+  },
+  server,
+);
+```
+
+The key (`'/api/premium'`) must match the route's URL path exactly as it is served, including any `basePath` you've configured. **If it doesn't match, the route runs without payment protection.** Always test an unpaid request, as shown below.
+
+Routes you don't wrap stay free.
+
+## Protect pages or many routes at once
+
+To protect pages, or several routes with one configuration, use `paymentProxy` instead. Create `proxy.ts` in your project root (`middleware.ts`, exporting `middleware`, on Next.js 15 and earlier):
+
+```ts
+// proxy.ts
+import { paymentProxy } from '@x402/next';
+import { network, payTo, price, server } from './lib/x402';
+
+export const proxy = paymentProxy(
+  {
+    '/protected': {
+      accepts: [{ scheme: 'exact', network, payTo, price: price('10000') }],
+      description: 'Premium page',
+      mimeType: 'text/html',
+    },
+  },
+  server,
+);
+
+export const config = {
+  matcher: ['/protected/:path*'],
+};
+```
+
+The `matcher` must cover every route in the config. A protected route missing from the matcher isn't checked.
+
+## Accept more than one token
+
+Add more entries to `accepts`, one per token. Each token needs its own `asset`, `name`, and `version` from `/supported`. See [Express](/guides/express#accept-more-than-one-token) for an example. The same configuration works in Next.js.
+
+## Test it
+
+```bash
+npm run dev
+curl -i http://localhost:3000/api/premium
+```
+
+An unpaid request must return `402 Payment Required` with the payment request in the response. If you get your content instead, the route isn't protected. Check that the path in your config matches the URL. To complete a payment, use an x402 client. The [Celo Sepolia sandbox](/guides/celo-sepolia) has a working example with test tokens.
+
+## Before you deploy
+
+- Keep `FACILITATOR_API_KEY` in server-side environment variables only, never `NEXT_PUBLIC_`.
+- Use your **payment address** as `PAY_TO`, not your payout wallet. Payments to any other address are rejected.
+- Set all variables in your hosting provider, including for the build step. Next.js loads your route files during `next build`, so a missing variable fails the build. This is intentional, so a misconfigured

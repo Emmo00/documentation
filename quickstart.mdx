@@ -1,47 +1,173 @@
 ---
 title: "Quickstart"
-description: "Begin with a guide on the fastest path to a successful outcome"
+description: "Protect an Express endpoint with x402 and get paid in stablecoins through x402Go."
 ---
 
-Describe how someone begins using your product. What is the first thing they need to do? Are there any prerequisites?
+In this guide you'll add x402 payments to an Express endpoint, with x402Go verifying and settling each payment. When you finish, an unpaid request to `/paid` returns `402 Payment Required`, and a paid request returns your response and sends the funds to your payout wallet.
 
-A quickstart should take someone from zero to using your product. They'll get a quick win and a sense of what they can accomplish.
+## 1. Get your credentials
 
-## Prerequisites
+In the [x402Go dashboard](https://x402go.online/dashboard), set up three things:
 
-Before you begin, you must have:
+1. **Payout wallet**: your own wallet, where settled payments end up. You set it in the dashboard and never use it in code.
+2. **API key**: authenticates your server's requests to the facilitator. It is shown only once, so copy it right away.
+3. **Payment address**: the address clients pay. It goes in `payTo`. Get this from the [API Keys Section](https://x402go.online/dashboard/api-keys) if the dashboard.
 
-- Requirement one (for example, Node.js 18+, a free account, an API key)
-- Requirement two (for example, a compatible device, a compatible browser, a compatible operating system)
+<Warning>
+Keep the API key on your server. Never put it in browser code or commit it to source control.
+</Warning>
 
-## Get started
+## 2. Install dependencies
 
-<Steps>
-  <Step title="Install">
-    Describe how to install your product or sign up.
+```bash
+npm install express dotenv @x402/express @x402/core @x402/evm
+npm install -D typescript tsx @types/express @types/node
+```
 
-    ```bash
-    npm install your-package
-    ```
-  </Step>
-  <Step title="Configure">
-    Describe any setup or configuration needed before first use.
+Install matching versions of the `@x402/*` packages. If you hit type errors, check the SDK's installation guide for the versions it expects.
 
-    ```bash
-    your-cli init
-    ```
-  </Step>
-  <Step title="Run it">
-    Show the first thing a user does to see it working.
+## 3. Configure environment variables
 
-    ```bash
-    your-cli start
-    ```
-  </Step>
-</Steps>
+Find the token you want to accept in the facilitator's supported list:
 
-<Tip>
-  Give people a way to get help. This could be a link to a support page, a chat with a customer support agent, or a forum for your product.
+```bash
+curl -s https://api.x402go.online/supported
+```
 
-  Example: Need help? Reach out to us at [support@yourcompany.com](mailto:support@yourcompany.com).
-</Tip>
+Copy its `asset`, `name`, `version`, and `assetTransferMethod` from the `supportedAssets` list for your network. Then create `.env`. This example uses USDC on Celo Sepolia:
+
+```dotenv
+FACILITATOR_URL=https://api.x402go.online
+FACILITATOR_API_KEY=your_api_key
+PAY_TO=your_payment_address
+
+NETWORK=eip155:11142220
+ASSET=0x01C5C0122039549AD1493B8220cABEdD739BC44E
+ASSET_NAME=USDC
+ASSET_VERSION=2
+AMOUNT=10000
+METHOD=eip3009
+```
+
+<Note>
+`AMOUNT` is in the token's smallest unit, not a decimal amount. USDC has 6 decimals, so `10000` is 0.01 USDC. The price must also be higher than x402Go's [fee](https://x402go.online/#fees) for that token, or payments are rejected.
+</Note>
+
+`ASSET_NAME` and `ASSET_VERSION` must match what `/supported` returns. Clients use them to sign the payment, and a mismatch fails with an invalid signature error.
+
+## 4. Add payment middleware
+
+Create `server.ts`:
+
+```ts
+import 'dotenv/config';
+import express from 'express';
+import { HTTPFacilitatorClient } from '@x402/core/server';
+import { paymentMiddleware, x402ResourceServer } from '@x402/express';
+import { ExactEvmScheme } from '@x402/evm/exact/server';
+
+const required = (name: string) => {
+  const value = process.env[name];
+  if (!value) throw new Error(`Missing environment variable: ${name}`);
+  return value;
+};
+
+const facilitatorUrl = required('FACILITATOR_URL').replace(/\/$/, '');
+const apiKey = required('FACILITATOR_API_KEY');
+const payTo = required('PAY_TO');
+const network = required('NETWORK') as `${string}:${string}`;
+const asset = required('ASSET');
+const assetName = required('ASSET_NAME');
+const assetVersion = required('ASSET_VERSION');
+const amount = process.env.AMOUNT ?? '10000';
+const method = process.env.METHOD ?? 'eip3009';
+
+const facilitator = new HTTPFacilitatorClient({
+  url: facilitatorUrl,
+  createAuthHeaders: async () => {
+    const headers = { 'x-api-key': apiKey };
+    return { verify: headers, settle: headers, supported: headers };
+  },
+});
+
+const resourceServer = new x402ResourceServer(facilitator).register(network, new ExactEvmScheme());
+
+const app = express();
+
+app.use(
+  paymentMiddleware(
+    {
+      'GET /paid': {
+        accepts: [
+          {
+            scheme: 'exact',
+            network,
+            payTo,
+            price: {
+              amount,
+              asset,
+              extra: {
+                name: assetName,
+                version: assetVersion,
+                ...(method === 'permit2' ? { assetTransferMethod: 'permit2' } : {}),
+              },
+            },
+          },
+        ],
+        description: 'Paid example endpoint',
+        mimeType: 'application/json',
+      },
+    },
+    resourceServer,
+  ),
+);
+
+app.get('/paid', (_req, res) => {
+  res.json({ ok: true, message: 'Payment accepted' });
+});
+
+app.listen(3000, () => {
+  console.log('Listening on http://localhost:3000');
+});
+```
+
+## 5. Run and test
+
+```bash
+npx tsx server.ts
+```
+
+An unpaid request should return `402 Payment Required` with the x402 payment challenge:
+
+```bash
+curl -i http://localhost:3000/paid
+```
+
+To complete a payment, use an x402 client. It reads the challenge, signs the payment, and retries the request. Get Testnet USDC from [Circle Faucet](https://faucet.circle.com/). The [Celo Sepolia sandbox](/guides/celo-sepolia) guide has a complete client example.
+
+## 6. Go live
+
+Before you accept real payments:
+
+1. Check `GET /supported` for the mainnet network and the token you want to accept.
+2. Update `NETWORK`, `ASSET`, `ASSET_NAME`, `ASSET_VERSION`, `AMOUNT`, and `METHOD` in your environment. Use `eip155:42220` for Celo mainnet.
+3. Confirm your payout wallet in the dashboard.
+4. Make one small real payment, then check the transaction on a block explorer and the payout in your dashboard.
+
+<Note>
+If the token's `assetTransferMethod` is `permit2` (cNGN, for example), set `METHOD=permit2`. Payers must also approve Permit2 on that token once before their first payment, otherwise payments fail with `permit2_allowance_required`.
+</Note>
+
+## Troubleshooting
+
+When a payment is rejected, `/verify` returns `isValid: false` with an `invalidReason`.
+
+| Reason | Likely cause |
+|---|---|
+| `invalid_pay_to` | `PAY_TO` is not your payment address. Copy it again from the dashboard. |
+| `unsupported_asset` | The token is not in `/supported` for that network. |
+| `unsupported_transfer_method` | `METHOD` doesn't match the token's `assetTransferMethod`. |
+| `amount_below_fee` | `AMOUNT` is not higher than the facilitator's fee for the token. |
+| `invalid_exact_evm_payload_signature` | `ASSET_NAME` or `ASSET_VERSION` doesn't match `/supported`. |
+
+A `401` response means the API key is missing or wrong.

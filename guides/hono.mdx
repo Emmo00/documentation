@@ -1,0 +1,133 @@
+---
+title: "Hono"
+description: "Charge for Hono endpoints with x402 and let x402Go verify, settle, and pay you."
+---
+
+Add the official x402 middleware to your Hono app and point it at x402Go. Requests to your paid routes get a payment request, and your handler runs once the customer has paid.
+
+This guide shows the Hono-specific setup. For credentials, choosing a token, and going live, see the [Quickstart](/quickstart).
+
+## Install
+
+```bash
+npm install hono @hono/node-server @x402/hono @x402/core @x402/evm dotenv
+npm install -D typescript tsx @types/node
+```
+
+Install matching versions of the `@x402/*` packages. If you see type errors, check the SDK's installation guide for the versions it expects.
+
+## Environment variables
+
+Get your API key and payment address from the [x402Go dashboard](https://x402go.online/dashboard). Get the token values from `GET /supported`.
+
+```bash
+curl -s https://api.x402go.online/supported
+```
+
+| Variable | Value |
+|---|---|
+| `FACILITATOR_API_KEY` | Your x402Go API key. Keep it on your server. |
+| `PAY_TO` | Your x402Go payment address. |
+| `NETWORK` | The network, for example `eip155:11142220` for Celo Sepolia or `eip155:42220` for Celo mainnet. |
+| `ASSET` | The token's contract address. |
+| `ASSET_NAME` | The token's `name` from `/supported`. |
+| `ASSET_VERSION` | The token's `version` from `/supported`. |
+| `METHOD` | Optional. Set to `permit2` if the token's `assetTransferMethod` is `permit2`. Omit it otherwise. |
+
+## Add the middleware
+
+Create `server.ts`:
+
+```ts
+import 'dotenv/config';
+import { Hono } from 'hono';
+import { serve } from '@hono/node-server';
+import { HTTPFacilitatorClient } from '@x402/core/server';
+import { paymentMiddleware, x402ResourceServer } from '@x402/hono';
+import { ExactEvmScheme } from '@x402/evm/exact/server';
+
+const required = (name: string) => {
+  const value = process.env[name];
+  if (!value) throw new Error(`Missing environment variable: ${name}`);
+  return value;
+};
+
+const apiKey = required('FACILITATOR_API_KEY');
+const payTo = required('PAY_TO');
+const network = required('NETWORK') as `${string}:${string}`;
+
+const facilitator = new HTTPFacilitatorClient({
+  url: process.env.FACILITATOR_URL ?? 'https://api.x402go.online',
+  createAuthHeaders: async () => {
+    const headers = { 'x-api-key': apiKey };
+    return { verify: headers, settle: headers, supported: headers };
+  },
+});
+
+const resourceServer = new x402ResourceServer(facilitator).register(network, new ExactEvmScheme());
+
+// Amounts are in the token's smallest unit (10000 = 0.01 for a 6-decimal token).
+const price = (amount: string) => ({
+  amount,
+  asset: required('ASSET'),
+  extra: {
+    name: required('ASSET_NAME'),
+    version: required('ASSET_VERSION'),
+    ...(process.env.METHOD === 'permit2' ? { assetTransferMethod: 'permit2' } : {}),
+  },
+});
+
+const app = new Hono();
+
+app.use(
+  paymentMiddleware(
+    {
+      'GET /premium': {
+        accepts: [{ scheme: 'exact', network, payTo, price: price('10000') }],
+        description: 'Premium content',
+        mimeType: 'application/json',
+      },
+      'GET /reports': {
+        accepts: [{ scheme: 'exact', network, payTo, price: price('50000') }],
+        description: 'Detailed reports',
+        mimeType: 'application/json',
+      },
+    },
+    resourceServer,
+  ),
+);
+
+app.get('/premium', (c) => c.json({ content: 'This resource requires payment.' }));
+app.get('/reports', (c) => c.json({ report: 'Your paid report.' }));
+
+// Routes not listed in the middleware config stay free.
+app.get('/health', (c) => c.json({ ok: true }));
+
+const port = Number(process.env.PORT) || 3000;
+serve({ fetch: app.fetch, port }, () => {
+  console.log(`Listening on http://localhost:${port}`);
+});
+```
+
+Register the middleware before the routes it protects. Each key in the config (`'GET /premium'`) is a route that requires payment, and you can give each route its own price.
+
+This example runs on Node. On another runtime such as Bun or Cloudflare Workers, replace the `serve` call with `export default app` and read your variables from that runtime's environment.
+
+## Accept more than one token
+
+Add more entries to `accepts`, one per token. Each token needs its own `asset`, `name`, and `version` from `/supported`. See [Express](/guides/express#accept-more-than-one-token) for an example. The same code works in Hono.
+
+## Test it
+
+```bash
+npx tsx server.ts
+curl -i http://localhost:3000/premium
+```
+
+An unpaid request returns `402 Payment Required` with the payment request in the response. To complete a payment, use an x402 client. The [Celo Sepolia sandbox](/guides/celo-sepolia) has a working example with test tokens.
+
+## Before you deploy
+
+- Keep `FACILITATOR_API_KEY` on the server only. Never expose it to browsers or commit it to source control.
+- Use your **payment address** as `PAY_TO`, not your payout wallet. Payments to any other address are rejected.
+- The server fails to start if a required variable is missing. This is intentional, so a misconfigured deployment doesn't serve content for free or accept payments it can't settle.

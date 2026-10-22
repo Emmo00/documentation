@@ -1,0 +1,290 @@
+---
+title: "API reference"
+description: "Base URL, authentication, and the request and response formats for the x402Go facilitator endpoints."
+---
+
+The x402Go facilitator has three endpoints. The x402 SDKs (`HTTPFacilitatorClient`) call them for you, so most integrations never construct these requests by hand. This page is for when you need the exact formats, are debugging, or are calling the API directly.
+
+## Base URL
+
+```text
+https://api.x402go.online
+```
+
+## Authentication
+
+Send your API key in the `x-api-key` header on `/verify` and `/settle`. Get the key from your [x402Go dashboard](https://x402go.online/dashboard). `Authorization: Bearer YOUR_X402GO_API_KEY` is also accepted.
+
+```http
+x-api-key: YOUR_X402GO_API_KEY
+```
+
+Keep the key on your backend, never in browser or mobile code. `GET /supported` is public, and sending the key there is harmless.
+
+A request with a missing or unknown key returns `401`:
+
+```json
+{ "error": "invalid_api_key" }
+```
+
+Your key is tied to your account. A payment is accepted only if its `payTo` is your own payment address. Anything else is rejected with `invalid_pay_to`.
+
+## Choosing a network
+
+Every endpoint also works under a network prefix, for example `POST /celo/settle` or `GET /celo-sepolia/supported`. The prefix is optional because the network is also in the payment itself. If you use one, it must match the payment's network, or the request fails with `invalid_network`.
+
+A network can be written as a name or as a CAIP-2 identifier:
+
+| Network | Name (v1) | Identifier (v2) |
+|---|---|---|
+| Celo Mainnet | `celo` | `eip155:42220` |
+| Celo Sepolia (testnet) | `celo-sepolia` | `eip155:11142220` |
+
+## Endpoints
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/supported` | List the x402 versions, networks, and tokens you can use. |
+| `POST` | `/verify` | Check a payment against your payment requirements. No funds move. |
+| `POST` | `/settle` | Complete a payment on-chain. Funds are collected and split in one transaction. |
+
+## GET /supported
+
+Returns what the facilitator accepts right now. Check it before you configure a token.
+
+```bash
+curl https://api.x402go.online/supported
+```
+
+```json
+{
+  "kinds": [
+    {
+      "x402Version": 2,
+      "scheme": "exact",
+      "network": "eip155:42220",
+      "extra": {
+        "defaultAsset": {
+          "asset": "0xcebA9300f2b948710d2653dD7B07f33A8B32118C",
+          "symbol": "USDC",
+          "decimals": 6,
+          "name": "USDC",
+          "version": "2",
+          "assetTransferMethod": "eip3009"
+        },
+        "supportedAssets": [
+          {
+            "asset": "0xcebA9300f2b948710d2653dD7B07f33A8B32118C",
+            "symbol": "USDC",
+            "decimals": 6,
+            "name": "USDC",
+            "version": "2",
+            "assetTransferMethod": "eip3009"
+          }
+        ]
+      }
+    },
+    { "x402Version": 1, "scheme": "exact", "network": "celo", "extra": { "...": "..." } }
+  ],
+  "signers": { "eip155:42220": ["0x..."] }
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `kinds[].x402Version`, `network` | The protocol version and network this entry covers. v2 uses identifiers like `eip155:42220`, v1 uses names like `celo`. |
+| `extra.supportedAssets` | The tokens you can accept on that network. |
+| `asset`, `decimals`, `symbol` | The token's contract address, decimals, and ticker. |
+| `name`, `version` | Values clients need to sign payments for this token. Copy them exactly into your server configuration. |
+| `assetTransferMethod` | `eip3009` or `permit2`. Use the method listed for the token. |
+| `signers` | The addresses that submit transactions. |
+
+Tokens appear here only when x402Go has set a fee for them. A newly added token can take about a minute to show up. v1 entries list only `eip3009` tokens, because `permit2` needs v2.
+
+An unknown network returns `400`:
+
+```json
+{ "success": false, "error": "unknown_network", "supported": ["celo", "celo-sepolia"] }
+```
+
+## POST /verify
+
+Checks that a payment is valid and matches your requirements. Nothing is submitted on-chain.
+
+**Request**
+
+```json
+{
+  "x402Version": 2,
+  "paymentPayload": {
+    "x402Version": 2,
+    "accepted": {
+      "scheme": "exact",
+      "network": "eip155:42220",
+      "asset": "0xcebA9300f2b948710d2653dD7B07f33A8B32118C",
+      "amount": "10000",
+      "payTo": "0xYourPaymentAddress",
+      "maxTimeoutSeconds": 60,
+      "extra": { "name": "USDC", "version": "2" }
+    },
+    "payload": {
+      "signature": "0x...",
+      "authorization": {
+        "from": "0xPayer",
+        "to": "0xYourPaymentAddress",
+        "value": "10000",
+        "validAfter": "0",
+        "validBefore": "1792061802",
+        "nonce": "0x..."
+      }
+    }
+  },
+  "paymentRequirements": {
+    "scheme": "exact",
+    "network": "eip155:42220",
+    "asset": "0xcebA9300f2b948710d2653dD7B07f33A8B32118C",
+    "amount": "10000",
+    "payTo": "0xYourPaymentAddress",
+    "maxTimeoutSeconds": 60,
+    "extra": { "name": "USDC", "version": "2" }
+  }
+}
+```
+
+`paymentRequirements` must match `paymentPayload.accepted`. Amounts are in the token's smallest unit.
+
+**Response**
+
+```json
+{ "isValid": true, "payer": "0xPayer" }
+```
+
+```json
+{ "isValid": false, "invalidReason": "amount_below_fee", "payer": "0xPayer" }
+```
+
+An invalid payment still returns `200`. Check `isValid`.
+
+<AccordionGroup>
+  <Accordion title="Permit2 payments (v2 only)">
+    Tokens whose `assetTransferMethod` is `permit2` use a different `payload`. The payer must have approved Permit2 on the token beforehand, or verification fails with `permit2_allowance_required`.
+
+```json
+    "payload": {
+      "signature": "0x...",
+      "permit2Authorization": {
+        "from": "0xPayer",
+        "permitted": { "token": "0xToken", "amount": "100000000" },
+        "spender": "0x402085c248EeA27D92E8b30b2C58ed07f9E20001",
+        "nonce": "...",
+        "deadline": "...",
+        "witness": { "to": "0xYourPaymentAddress", "validAfter": "0" }
+      }
+    }
+```
+
+    Set `extra.assetTransferMethod` to `"permit2"` in both `accepted` and `paymentRequirements`.
+  </Accordion>
+  <Accordion title="x402 v1 format">
+    v1 puts `scheme` and `network` on the payload, and requirements use `maxAmountRequired` instead of `amount`. v1 supports `eip3009` tokens only.
+
+```json
+    {
+      "x402Version": 1,
+      "paymentPayload": {
+        "x402Version": 1,
+        "scheme": "exact",
+        "network": "celo",
+        "payload": { "signature": "0x...", "authorization": { "...": "..." } }
+      },
+      "paymentRequirements": {
+        "scheme": "exact",
+        "network": "celo",
+        "maxAmountRequired": "10000",
+        "resource": "https://api.example.com/premium",
+        "description": "Premium content",
+        "mimeType": "application/json",
+        "payTo": "0xYourPaymentAddress",
+        "maxTimeoutSeconds": 60,
+        "asset": "0xcebA9300f2b948710d2653dD7B07f33A8B32118C",
+        "extra": { "name": "USDC", "version": "2" }
+      }
+    }
+```
+  </Accordion>
+</AccordionGroup>
+
+## POST /settle
+
+Completes the payment on-chain. The request body is the same as `/verify`. x402Go checks the payment again before it submits anything, because things can change between the two calls.
+
+**Response**
+
+```json
+{
+  "success": true,
+  "transaction": "0xTransactionHash",
+  "network": "eip155:42220",
+  "payer": "0xPayer"
+}
+```
+
+```json
+{
+  "success": false,
+  "errorReason": "authorization_used",
+  "transaction": "",
+  "network": "eip155:42220",
+  "payer": "0xPayer"
+}
+```
+
+How settlement behaves:
+
+- **One transaction.** The payment is collected and split between your payout wallet and the fee in a single transaction. Your first payment on a network also creates your payment address on-chain, so it takes a little longer.
+- **Timeouts.** Settlement can wait up to about a minute for confirmation. Set your HTTP timeout above 60 seconds, for example 90.
+- **Retries are safe for successful payments.** Sending the same payment again returns the original result. A failed attempt can be retried.
+- **If the response has a `transaction` but `success` is `false`,** the transaction may still land. Look the hash up on Celoscan before you retry or refuse the request.
+
+## Status codes
+
+| Code | Meaning |
+|---|---|
+| `200` | The request was processed. Check `isValid` or `success`, because invalid or failed payments also return `200`. |
+| `400` | The body couldn't be read, with `invalid_payload`, or the network is unknown on `/supported`. |
+| `401` | The API key is missing or invalid. |
+| `500` | Unexpected error, with `unexpected_verify_error` or `unexpected_settle_error`. Safe to retry. |
+
+## Error reasons
+
+`invalidReason` (from `/verify`) and `errorReason` (from `/settle`) use the same values.
+
+| Reason | What to do |
+|---|---|
+| `invalid_payload` | The request body is malformed. |
+| `invalid_network` | The network isn't supported, or the URL prefix and the payment disagree. |
+| `invalid_payment_requirements` | `paymentRequirements` doesn't match what the payer signed. Send the same requirements you served. |
+| `invalid_pay_to` | `payTo` isn't your payment address. Copy it again from the dashboard. |
+| `unsupported_scheme` | Only `exact` is supported. |
+| `unsupported_asset` | The token isn't listed by `/supported` for that network. |
+| `unsupported_transfer_method` | `assetTransferMethod` doesn't match the token's method in `/supported`. |
+| `token_not_supported` | x402Go hasn't set up fees for this token. |
+| `amount_below_fee` | The price must be higher than the fee. Raise it. |
+| `invalid_exact_evm_payload_authorization_value` | The signed amount doesn't equal the required amount. |
+| `invalid_exact_evm_payload_recipient_mismatch` | The payment names a different recipient than `payTo`. |
+| `invalid_exact_evm_payload_authorization_valid_before` | The authorization expires too soon or has expired. |
+| `invalid_exact_evm_payload_authorization_valid_after` | The authorization isn't valid yet. |
+| `invalid_exact_evm_payload_signature` | The signature is wrong. Check that `name` and `version` match `/supported`. |
+| `unsupported_signature_format` | EIP-3009 payments need a standard 65-byte signature. |
+| `authorization_used` | This payment was already used. The payer needs to sign a new one. |
+| `insufficient_funds` | The payer doesn't hold enough of the token. |
+| `invalid_permit2_spender` | The Permit2 spender isn't the x402 Permit2 contract. |
+| `permit2_token_mismatch` | The Permit2 token doesn't match the requirements. |
+| `permit2_deadline_expired` | The Permit2 payment has expired. |
+| `permit2_nonce_used` | This Permit2 payment was already used. |
+| `permit2_allowance_required` | The payer must approve Permit2 on the token first. |
+| `simulation_failed` | The transaction would fail on-chain. Check the other reasons and retry with a new payment. |
+| `invalid_transaction_state` | The transaction didn't complete as expected. Check the hash on Celoscan. |
+| `unexpected_verify_error`, `unexpected_settle_error` | Something went wrong on our side. Retry. |
+
+Each response may also include an `invalidMessage` or `errorMessage` with more detail.

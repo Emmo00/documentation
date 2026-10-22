@@ -1,0 +1,86 @@
+---
+title: "Security and contracts"
+description: "How to keep your API key safe, how payments are routed, and the verified contract addresses behind x402Go."
+---
+
+## API key security
+
+Your x402Go API key lets your server call the facilitator. Treat it like a password.
+
+- Send it only from your server, in the `x-api-key` header.
+- Never put it in browser code, mobile apps, public examples, or client-side environment variables (such as `NEXT_PUBLIC_` variables).
+- Store it in a secret manager or in server environment variables.
+- Rotate it right away if it may have been exposed.
+- Don't log request headers or payment payloads.
+
+## Payment address and payout wallet
+
+Three values are easy to confuse. Each has a single job:
+
+| Value | What it is | Where it goes |
+|---|---|---|
+| **API key** | A secret that identifies your server to x402Go. | The `x-api-key` header on your server's requests. |
+| **Payment address** | The address your customers pay. It is created for you by the x402Go contracts. | `payTo` in your x402 payment requirements. |
+| **Payout wallet** | Your own wallet, where your earnings end up. | Set in the x402Go dashboard. Never use it as `payTo`. |
+
+When a payment settles, the contracts split it in the same transaction. Your earnings go to your payout wallet and the fee goes to x402Go. The contracts never hold your funds. Set and check your payout wallet before you accept payments.
+
+## How settlement is protected
+
+x402 checks every payment twice: first it verifies the payment, then it settles it.
+
+- Only deliver your content after settlement succeeds.
+- Use the official x402 middleware, which does this for you. Don't write custom code that ignores a failed verification or settlement.
+- Each token uses one of two transfer methods (`eip3009` or `permit2`). Use only the method that `GET /supported` lists for your network and token.
+
+## Contracts
+
+x402Go uses two contracts:
+
+- **Payment relayer factory.** Creates each merchant's payment address and handles the fee and payout split.
+- **Payment relayer implementation.** The shared code that every payment address runs.
+
+<Warning>
+Never send funds to the factory or the implementation. Customers pay your own payment address, which is the `payTo` value from your dashboard.
+</Warning>
+
+### Celo Mainnet
+
+| Contract | Address |
+|---|---|
+| Payment relayer factory | [`0xdfBB7b9F9449024A36E34539f94e1ca14f404ef6`](https://celoscan.io/address/0xdfBB7b9F9449024A36E34539f94e1ca14f404ef6) |
+| Payment relayer implementation | [`0x2A081D94C3bA4183bBFd907A39Ad1597DD9261a1`](https://celoscan.io/address/0x2A081D94C3bA4183bBFd907A39Ad1597DD9261a1) |
+
+Explorer: [Celoscan](https://celoscan.io/)
+
+### Celo Sepolia (testnet)
+
+| Contract | Address |
+|---|---|
+| Payment relayer factory | [`0xdfBB7b9F9449024A36E34539f94e1ca14f404ef6`](https://sepolia.celoscan.io/address/0xdfBB7b9F9449024A36E34539f94e1ca14f404ef6) |
+| Payment relayer implementation | [`0x2A081D94C3bA4183bBFd907A39Ad1597DD9261a1`](https://sepolia.celoscan.io/address/0x2A081D94C3bA4183bBFd907A39Ad1597DD9261a1) |
+
+Explorer: [Celo Sepolia Celoscan](https://sepolia.celoscan.io/)
+
+The addresses are identical on both networks, and so is your own payment address. You can read the contracts' verified source code on the **Contract** tab of each Celoscan page.
+
+## Check your payment address on-chain
+
+You can confirm that your `payTo` came from the x402Go factory:
+
+1. Open the factory on [Celoscan](https://celoscan.io/address/0xdfBB7b9F9449024A36E34539f94e1ca14f404ef6) (or the [testnet page](https://sepolia.celoscan.io/address/0xdfBB7b9F9449024A36E34539f94e1ca14f404ef6)).
+2. Go to **Contract**, then **Read Contract**.
+3. Open `vaultOf` and enter the wallet address you use to sign in to the dashboard.
+4. Compare the result with the payment address in your dashboard and your server's `PAY_TO`. They must match exactly.
+
+Your payment address is calculated in advance. It has no code on-chain until your first payment settles on that network, so an empty page on Celoscan before then is expected.
+
+## Operational checklist
+
+- [ ] Your API key stays on your server and is rotated if exposed.
+- [ ] `payTo` matches the payment address in your dashboard, and `vaultOf` returns the same address.
+- [ ] Your payout wallet is set and checked.
+- [ ] Your network and token are listed by `GET /supported`.
+- [ ] Unpaid requests get a `402 Payment Required` response.
+- [ ] Failed verification or settlement never unlocks your content.
+- [ ] You've made one small real payment and checked it on Celoscan.

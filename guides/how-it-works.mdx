@@ -1,0 +1,49 @@
+---
+title: "How it works"
+description: "Understand the x402 payment lifecycle and how x402Go routes settled payments."
+---
+
+With [x402](https://www.x402.org/), your API can ask for payment as part of an ordinary web request. Customers, whether apps or AI agents, pay automatically in stablecoins. There are no accounts, checkout pages, or invoices.
+
+x402 uses HTTP responses to communicate payment requirements. A client requests a protected resource, receives a payment challenge when payment is required, creates a payment payload, and retries the request. The resource server uses a facilitator to verify and settle the payment.
+
+## What happens when someone pays
+
+<Steps>
+  <Step title="A customer asks for your content">
+    A customer's app or AI agent requests one of your paid endpoints, like any other API request.
+  </Step>
+  <Step title="Your server asks for payment">
+    Your server replies that payment is required. The reply includes the price, the currency, and the address to pay.
+  </Step>
+  <Step title="The customer pays">
+    The customer's app approves the payment automatically and sends the request again, this time with the payment attached.
+  </Step>
+  <Step title="x402Go checks the payment">
+    Your server asks x402Go to confirm the payment is valid and matches your price. No money moves yet.
+  </Step>
+  <Step title="x402Go completes the payment">
+    Once the check passes, x402Go completes the payment. Your earnings go straight to your wallet, and x402Go's small fee is taken from the same payment.
+  </Step>
+  <Step title="Your server delivers the content">
+    When the payment is complete, your server sends the customer what they asked for.
+  </Step>
+</Steps>
+
+If a payment can't be completed, your server doesn't deliver the content.
+
+## Where the money goes
+
+x402Go uses three things, and each has its own job:
+
+- **API key:** a secret that identifies your server to x402Go. Keep it private.
+- **Payment address:** where your customers send their payments. Your server gives it to them in step 2. It is the same on every network x402Go supports, and it is set up automatically with your first payment on each network, so that payment may take a little longer.
+- **Payout wallet:** your own wallet. Every payment is sent here when it completes.
+
+x402Go never holds your money. Each payment is split the moment it completes, with your earnings going to your payout wallet and the fee going to x402Go. There is no balance to withdraw.
+
+Set your payout wallet in the dashboard and check it carefully before you accept real payments.
+
+## Next steps
+
+Ready to try it? Follow the [Quickstart](/quickstart).

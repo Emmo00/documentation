@@ -1,0 +1,138 @@
+---
+title: "Express"
+description: "Charge for Express endpoints with x402 and let x402Go verify, settle, and pay you."
+---
+
+Add the official x402 middleware to your Express app and point it at x402Go. Requests to your paid routes then get a payment request, and your handler runs once the customer has paid.
+
+This guide shows the Express-specific setup. For credentials, choosing a token, and going live, see the [Quickstart](/quickstart).
+
+## Install
+
+```bash
+npm install express dotenv @x402/express @x402/core @x402/evm
+```
+
+## Environment variables
+
+Get your **API key** and **payment address** from the [x402Go dashboard](https://x402go.online/dashboard). Get the token values from `GET /supported`.
+
+```bash
+curl -s https://api.x402go.online/supported
+```
+
+| Variable | Value |
+|----|----|
+| `FACILITATOR_API_KEY` | Your x402Go API key. Keep it on your server. |
+| `PAY_TO` | Your x402Go payment address. |
+| `NETWORK` | The network, for example `eip155:11142220` for Celo Sepolia or `eip155:42220` for Celo mainnet. |
+| `ASSET` | The token's contract address. |
+| `ASSET_NAME` | The token's `name` from `/supported`. |
+| `ASSET_VERSION` | The token's `version` from `/supported`. |
+| `METHOD` | Optional. Set to `permit2` if the token's `assetTransferMethod` is `permit2`. Omit it otherwise. |
+
+## Add the middleware
+
+```ts
+import 'dotenv/config';
+import express from 'express';
+import { HTTPFacilitatorClient } from '@x402/core/server';
+import { paymentMiddleware, x402ResourceServer } from '@x402/express';
+import { ExactEvmScheme } from '@x402/evm/exact/server';
+
+const required = (name: string) => {
+  const value = process.env[name];
+  if (!value) throw new Error(`Missing environment variable: ${name}`);
+  return value;
+};
+
+const apiKey = required('FACILITATOR_API_KEY');
+const payTo = required('PAY_TO');
+const network = required('NETWORK') as `${string}:${string}`;
+
+const facilitator = new HTTPFacilitatorClient({
+  url: process.env.FACILITATOR_URL ?? 'https://api.x402go.online',
+  createAuthHeaders: async () => {
+    const headers = { 'x-api-key': apiKey };
+    return { verify: headers, settle: headers, supported: headers };
+  },
+});
+
+const resourceServer = new x402ResourceServer(facilitator).register(network, new ExactEvmScheme());
+
+// Amounts are in the token's smallest unit (10000 = 0.01 for a 6-decimal token).
+const price = (amount: string) => ({
+  amount,
+  asset: required('ASSET'),
+  extra: {
+    name: required('ASSET_NAME'),
+    version: required('ASSET_VERSION'),
+    ...(process.env.METHOD === 'permit2' ? { assetTransferMethod: 'permit2' } : {}),
+  },
+});
+
+const app = express();
+
+app.use(
+  paymentMiddleware(
+    {
+      'GET /premium': {
+        accepts: [{ scheme: 'exact', network, payTo, price: price('10000') }],
+        description: 'Premium content',
+        mimeType: 'application/json',
+      },
+      'GET /reports': {
+        accepts: [{ scheme: 'exact', network, payTo, price: price('50000') }],
+        description: 'Detailed reports',
+        mimeType: 'application/json',
+      },
+    },
+    resourceServer,
+  ),
+);
+
+app.get('/premium', (_req, res) => {
+  res.json({ content: 'This resource requires payment.' });
+});
+
+app.get('/reports', (_req, res) => {
+  res.json({ report: 'Your paid report.' });
+});
+
+// Routes not listed in the middleware config stay free.
+app.get('/health', (_req, res) => {
+  res.json({ ok: true });
+});
+
+app.listen(3000);
+```
+
+Register the middleware before the routes it protects. Each key in the config (`'GET /premium'`) is a route that requires payment, and you can give each route its own price.
+
+## Accept more than one token
+
+List several entries in `accepts`. Each uses its own token's `asset`, `name`, and `version` from `/supported`, and the customer's app pays with whichever token it holds:
+
+```ts
+accepts: [
+  { scheme: 'exact', network, payTo, price: { amount: '10000', asset: USDC.asset, extra: { name: USDC.name, version: USDC.version } } },
+  { scheme: 'exact', network, payTo, price: { amount: '10000', asset: USDT.asset, extra: { name: USDT.name, version: USDT.version } } },
+],
+```
+
+Set `amount` per token. Tokens can have different decimals, so the same number is not always the same price. Every price must also be higher than the x402Go fee for that token.
+
+## Test it
+
+```bash
+npx tsx server.ts
+curl -i http://localhost:3000/premium
+```
+
+An unpaid request returns `402 Payment Required` with the payment request in the response. To complete a payment, use an x402 client. The [Celo Sepolia sandbox](/guides/celo-sepolia) has a working example with test tokens.
+
+## Before you deploy
+
+- Keep `FACILITATOR_API_KEY` on the server only. Never expose it to browsers or commit it to source control.
+- Use the **payment address** you got from the dashboard as `PAY_TO`, not your payout wallet. Payments to any other address are rejected.
+- The server fails to start if a required variable is missing. This is intentional, so a misconfigured deployment doesn't serve content for free or accept payments it can't settle.
