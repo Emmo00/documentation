@@ -117,6 +117,8 @@ This example runs on Node. On another runtime such as Bun or Cloudflare Workers,
 
 Add more entries to `accepts`, one per token. Each token needs its own `asset`, `name`, and `version` from `/supported`. See [Express](/guides/express#accept-more-than-one-token) for an example. The same code works in Hono.
 
+Every configured amount must be greater than the token's fee. See the [fee examples and current token fees](https://x402go.online/#tokens).
+
 ## Test it
 
 ```bash

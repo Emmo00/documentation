@@ -101,6 +101,14 @@ curl https://api.x402go.online/supported
 
 Tokens appear here only when x402Go has set a fee for them. A newly added token can take about a minute to show up. v1 entries list only `eip3009` tokens, because `permit2` needs v2.
 
+## Fees and minimum prices
+
+x402Go deducts a fee from each settled payment. The customer pays the full amount in your payment requirements, and your payout wallet receives that amount minus the applicable fee.
+
+For USD-denominated tokens, the fee is **$0.0035 per transaction**. For cNGN settlement, the fee is **₦4.80 per transaction**. The requested amount must be greater than the token's fee. Amounts equal to or below the fee fail with `amount_below_fee`.
+
+See the [current token fees and examples](https://x402go.online/#tokens) when choosing an asset. Because payment amounts use each token's smallest unit, use the token's `decimals` value from `/supported` to convert the minimum price correctly.
+
 An unknown network returns `400`:
 
 ```json

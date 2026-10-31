@@ -55,6 +55,8 @@ METHOD=eip3009
 
 `AMOUNT` is in the token's smallest unit. USDC has 6 decimals, so `10000` is 0.01 USDC. The price must also be higher than the x402Go fee.
 
+For USD-denominated tokens, x402Go charges $0.0035 per transaction, including on Celo Sepolia. Choose an amount greater than the fee; otherwise verification returns `amount_below_fee`.
+
 Start the server and check that an unpaid request is refused:
 
 ```bash
